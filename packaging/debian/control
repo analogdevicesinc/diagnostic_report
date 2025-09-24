@@ -1,0 +1,16 @@
+Source: diagnostic-report
+Section: devel
+Priority: optional
+Maintainer: Engineerzone <https://ez.analog.com/sw-interface-tools>
+Build-Depends: debhelper-compat (= 13), dh-python, python3, python3-setuptools, pybuild-plugin-pyproject
+Standards-Version: 4.5.1
+Homepage: https://github.com/analogdevicesinc/diagnostic_report
+Rules-Requires-Root: no
+
+Package: diagnostic-report
+Architecture: @ARCHITECTURE@
+Multi-Arch: foreign
+Depends: ${misc:Depends}, ${shlibs:Depends}, ${python3:Depends}
+Description: ADI Diagnostic Report Application
+ Documentation at
+ https://wiki.analog.com/resources/tools-software/linux-software/diagnostic_report
