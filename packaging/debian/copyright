@@ -1,6 +1,6 @@
 Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
 Upstream-Name: diagnostic-report
-Upstream-Contact: Engineerzone <https://ez.analog.com/sw-interface-tools>
+Upstream-Contact: Engineerzone <linux@analog.com>
 Source: https://github.com/analogdevicesinc/diagnostic_report
 #
 # Please double check copyright with the licensecheck(1) command.
