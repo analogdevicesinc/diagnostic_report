@@ -70,21 +70,33 @@ jobs:
         echo "Version to use $app_version"
         echo "version=$app_version" >> "$GITHUB_OUTPUT"
         echo "can_create_release=$create_release" >> "$GITHUB_OUTPUT"
-  build_and_deploy_for_kuiper:
-    runs-on: ubuntu-latest
+  build_containerized:
+    runs-on: ${{matrix.runner}}
     needs: identify_version
-    env:
-      CONTAINER_BASE_NAME: kuiper-container-basic
     strategy:
       fail-fast: false
       matrix:
         include:
-          - docker_image: aandrisa/kuiper_basic_64:latest
-            image_arch: linux/arm64
+          - runner: ubuntu-24.04-arm
+            docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_64:latest
+            distro: kuiper
             architecture: arm64
-          - docker_image: aandrisa/kuiper_basic_32:latest
-            image_arch: linux/arm/v7
+            platform_flag: ""
+          - runner: ubuntu-24.04-arm
+            docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_32:latest
+            distro: kuiper
             architecture: armhf
+            platform_flag: "--platform linux/arm/v7"
+          - runner: ubuntu-26.04-arm
+            docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_64:latest
+            distro: debian
+            architecture: arm64
+            platform_flag: ""
+          - runner: ubuntu-26.04-arm
+            docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_32:latest
+            distro: debian
+            architecture: armhf
+            platform_flag: "--platform linux/arm/v7"
     steps:
     - name: Checkout code repository
       uses: actions/checkout@v4
@@ -97,14 +109,11 @@ jobs:
         repository: analogdevicesinc/shared-actions
         path: shared-actions
 
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
-
     - name: Start persistent container
       run: |
         docker run -d \
-            --platform ${{matrix.image_arch}} \
-            --name ${{env.CONTAINER_BASE_NAME}}-${{matrix.architecture}} \
+            ${{matrix.platform_flag}} \
+            --name ${{matrix.distro}}-${{matrix.architecture}} \
             -v "$GITHUB_WORKSPACE/${{env.APP_NAME}}:/workspace/${{env.APP_NAME}}" \
             -v "$GITHUB_WORKSPACE/shared-actions:/workspace/shared-actions" \
             -w /workspace/${{env.APP_NAME}} \
@@ -112,33 +121,43 @@ jobs:
 
     - name: Create debian package
       run: |
-        docker exec -e VERSION=${{needs.identify_version.outputs.app-version}} ${{env.CONTAINER_BASE_NAME}}-${{matrix.architecture}} bash /workspace/shared-actions/deb-generator-action/build-deb.sh
+        docker exec -e VERSION=${{needs.identify_version.outputs.app-version}} ${{matrix.distro}}-${{matrix.architecture}} bash /workspace/shared-actions/deb-generator-action/build-deb.sh
 
     - name: Install application
       run: |
-        docker exec ${{env.CONTAINER_BASE_NAME}}-${{matrix.architecture}} sh -c "sudo dpkg -i /workspace/${{env.APP_NAME}}/artifacts/*.deb"
+        docker exec ${{matrix.distro}}-${{matrix.architecture}} sh -c "sudo dpkg -i /workspace/${{env.APP_NAME}}/artifacts/*.deb"
 
     - name: Verify install locations
       run: |
-        docker exec ${{env.CONTAINER_BASE_NAME}}-${{matrix.architecture}} sh -c ".github/scripts/verify_install.sh"
+        docker exec ${{matrix.distro}}-${{matrix.architecture}} sh -c ".github/scripts/verify_install.sh"
 
     - name: Copy .deb from container to host
       env:
         DEB_FILE_NAME: ${{env.APP_NAME}}_${{needs.identify_version.outputs.app-version}}-1_${{matrix.architecture}}
       run: |
-          docker cp ${{env.CONTAINER_BASE_NAME}}-${{matrix.architecture}}:/workspace/${{env.APP_NAME}}/artifacts/${{env.DEB_FILE_NAME}}.deb ./${{env.DEB_FILE_NAME}}.deb
+          docker cp ${{matrix.distro}}-${{matrix.architecture}}:/workspace/${{env.APP_NAME}}/artifacts/${{env.DEB_FILE_NAME}}.deb ./${{env.DEB_FILE_NAME}}.deb
 
     - name: Upload .deb artifacts to github
       uses: actions/upload-artifact@v4
       with:
-        name: ${{env.APP_NAME}}-${{matrix.architecture}}
+        name: ${{env.APP_NAME}}-${{matrix.distro}}-${{matrix.architecture}}
         path: ${{env.APP_NAME}}_${{needs.identify_version.outputs.app-version}}-1_${{matrix.architecture}}.deb
         if-no-files-found: error
-  build_and_deploy_for_ubuntu:
-    runs-on: ubuntu-latest
+  build_native:
+    runs-on: ${{matrix.runner}}
     needs: identify_version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-latest
+            distro: ubuntu-26.04
+            architecture: amd64
+          - runner: ubuntu-24.04
+            distro: ubuntu-24.04
+            architecture: amd64
     env:
-      architecture: amd64
+      architecture: ${{matrix.architecture}}
     defaults:
       run:
         working-directory: ${{env.APP_NAME}}
@@ -166,13 +185,13 @@ jobs:
     - name: Upload .deb artifacts to github
       uses: actions/upload-artifact@v4
       with:
-        name: ${{env.APP_NAME}}-ubuntu
+        name: ${{env.APP_NAME}}-${{matrix.distro}}-${{matrix.architecture}}
         path: ${{steps.build_deb.outputs.artifact-dir}}/*.deb
         if-no-files-found: error
   create_release_from_tag:
     needs:
-      - build_and_deploy_for_kuiper
-      - build_and_deploy_for_ubuntu
+      - build_containerized
+      - build_native
       - identify_version
     runs-on: ubuntu-latest
     if: ${{needs.identify_version.outputs.can-create-release == 'true'}}
@@ -180,6 +199,9 @@ jobs:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
+        # The ubuntu-24.04 amd64 build is CI-only; only the ubuntu-26.04 amd64
+        # package is published (both produce an identically named _amd64.deb).
+        pattern: '!*-ubuntu-24.04-amd64'
         merge-multiple: true
     - name: Release
       uses: ncipollo/release-action@v1
