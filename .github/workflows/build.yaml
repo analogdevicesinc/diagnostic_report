@@ -3,6 +3,8 @@ name: Build and Deploy Diagnostic Report
 env:
   APP_NAME: diagnostic-report
 
+permissions:
+  contents: read
 on:
   workflow_dispatch:
   push:
@@ -87,6 +89,7 @@ jobs:
             distro: kuiper
             architecture: armhf
             platform_flag: "--platform linux/arm/v7"
+
           - runner: ubuntu-26.04-arm
             docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_64:latest
             distro: debian
@@ -101,7 +104,11 @@ jobs:
     - name: Checkout code repository
       uses: actions/checkout@v4
       with:
-        path: ${{env.APP_NAME}}
+        path: ${{env.APP_NAME}
+
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
 
     - name: Checkout deb-generator action
       uses: actions/checkout@v4
@@ -132,16 +139,18 @@ jobs:
         docker exec ${{matrix.distro}}-${{matrix.architecture}} sh -c ".github/scripts/verify_install.sh"
 
     - name: Copy .deb from container to host
-      env:
-        DEB_FILE_NAME: ${{env.APP_NAME}}_${{needs.identify_version.outputs.app-version}}-1_${{matrix.architecture}}
       run: |
-          docker cp ${{matrix.distro}}-${{matrix.architecture}}:/workspace/${{env.APP_NAME}}/artifacts/${{env.DEB_FILE_NAME}}.deb ./${{env.DEB_FILE_NAME}}.deb
+        mkdir -p dist
+        docker cp "${{matrix.distro}}-${{matrix.architecture}}:/workspace/${{env.APP_NAME}}/artifacts/." dist/
+        for deb in dist/*.deb; do
+          mv "$deb" "${deb%.deb}_${{matrix.distro}}.deb"
+        done
 
     - name: Upload .deb artifacts to github
       uses: actions/upload-artifact@v4
       with:
         name: ${{env.APP_NAME}}-${{matrix.distro}}-${{matrix.architecture}}
-        path: ${{env.APP_NAME}}_${{needs.identify_version.outputs.app-version}}-1_${{matrix.architecture}}.deb
+        path: dist/*.deb
         if-no-files-found: error
   build_native:
     runs-on: ${{matrix.runner}}
@@ -156,8 +165,6 @@ jobs:
           - runner: ubuntu-24.04
             distro: ubuntu-24.04
             architecture: amd64
-    env:
-      architecture: ${{matrix.architecture}}
     defaults:
       run:
         working-directory: ${{env.APP_NAME}}
@@ -182,6 +189,13 @@ jobs:
       run: |
         .github/scripts/verify_install.sh
 
+    - name: Tag package with distro
+      # Keep release asset names distinct across distros of the same arch.
+      run: |
+        for deb in "${{steps.build_deb.outputs.artifact-dir}}"/*.deb; do
+          mv "$deb" "${deb%.deb}_${{matrix.distro}}.deb"
+        done
+
     - name: Upload .deb artifacts to github
       uses: actions/upload-artifact@v4
       with:
@@ -194,14 +208,13 @@ jobs:
       - build_native
       - identify_version
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     if: ${{needs.identify_version.outputs.can-create-release == 'true'}}
     steps:
     - name: Download all artifacts
       uses: actions/download-artifact@v4
       with:
-        # The ubuntu-24.04 amd64 build is CI-only; only the ubuntu-26.04 amd64
-        # package is published (both produce an identically named _amd64.deb).
-        pattern: '!*-ubuntu-24.04-amd64'
         merge-multiple: true
     - name: Release
       uses: ncipollo/release-action@v1
