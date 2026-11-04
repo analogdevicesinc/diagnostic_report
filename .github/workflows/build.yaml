@@ -73,42 +73,23 @@ jobs:
         echo "version=$app_version" >> "$GITHUB_OUTPUT"
         echo "can_create_release=$create_release" >> "$GITHUB_OUTPUT"
   build_containerized:
-    runs-on: ${{matrix.runner}}
+    runs-on: ubuntu-26.04-arm
     needs: identify_version
     strategy:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-24.04-arm
-            docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_64:latest
-            distro: kuiper
+          - docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_64:latest
             architecture: arm64
             platform_flag: ""
-          - runner: ubuntu-24.04-arm
-            docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_32:latest
-            distro: kuiper
-            architecture: armhf
-            platform_flag: "--platform linux/arm/v7"
-
-          - runner: ubuntu-26.04-arm
-            docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_64:latest
-            distro: debian
-            architecture: arm64
-            platform_flag: ""
-          - runner: ubuntu-26.04-arm
-            docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_32:latest
-            distro: debian
+          - docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_32:latest
             architecture: armhf
             platform_flag: "--platform linux/arm/v7"
     steps:
     - name: Checkout code repository
       uses: actions/checkout@v4
       with:
-        path: ${{env.APP_NAME}
-
-
-    - name: Set up QEMU
-      uses: docker/setup-qemu-action@v3
+        path: ${{env.APP_NAME}}
 
     - name: Checkout deb-generator action
       uses: actions/checkout@v4
@@ -120,7 +101,7 @@ jobs:
       run: |
         docker run -d \
             ${{matrix.platform_flag}} \
-            --name ${{matrix.distro}}-${{matrix.architecture}} \
+            --name kuiper-${{matrix.architecture}} \
             -v "$GITHUB_WORKSPACE/${{env.APP_NAME}}:/workspace/${{env.APP_NAME}}" \
             -v "$GITHUB_WORKSPACE/shared-actions:/workspace/shared-actions" \
             -w /workspace/${{env.APP_NAME}} \
@@ -128,28 +109,25 @@ jobs:
 
     - name: Create debian package
       run: |
-        docker exec -e VERSION=${{needs.identify_version.outputs.app-version}} ${{matrix.distro}}-${{matrix.architecture}} bash /workspace/shared-actions/deb-generator-action/build-deb.sh
+        docker exec -e VERSION=${{needs.identify_version.outputs.app-version}} kuiper-${{matrix.architecture}} bash /workspace/shared-actions/deb-generator-action/build-deb.sh
 
     - name: Install application
       run: |
-        docker exec ${{matrix.distro}}-${{matrix.architecture}} sh -c "sudo dpkg -i /workspace/${{env.APP_NAME}}/artifacts/*.deb"
+        docker exec kuiper-${{matrix.architecture}} sh -c "sudo dpkg -i /workspace/${{env.APP_NAME}}/artifacts/*.deb"
 
     - name: Verify install locations
       run: |
-        docker exec ${{matrix.distro}}-${{matrix.architecture}} sh -c ".github/scripts/verify_install.sh"
+        docker exec kuiper-${{matrix.architecture}} sh -c ".github/scripts/verify_install.sh"
 
     - name: Copy .deb from container to host
       run: |
         mkdir -p dist
-        docker cp "${{matrix.distro}}-${{matrix.architecture}}:/workspace/${{env.APP_NAME}}/artifacts/." dist/
-        for deb in dist/*.deb; do
-          mv "$deb" "${deb%.deb}_${{matrix.distro}}.deb"
-        done
+        docker cp "kuiper-${{matrix.architecture}}:/workspace/${{env.APP_NAME}}/artifacts/." dist/
 
     - name: Upload .deb artifacts to github
       uses: actions/upload-artifact@v4
       with:
-        name: ${{env.APP_NAME}}-${{matrix.distro}}-${{matrix.architecture}}
+        name: ${{env.APP_NAME}}-${{matrix.architecture}}
         path: dist/*.deb
         if-no-files-found: error
   build_native:
@@ -159,7 +137,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - runner: ubuntu-latest
+          - runner: ubuntu-26.04
             distro: ubuntu-26.04
             architecture: amd64
           - runner: ubuntu-24.04
@@ -208,8 +186,6 @@ jobs:
       - build_native
       - identify_version
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
     if: ${{needs.identify_version.outputs.can-create-release == 'true'}}
     steps:
     - name: Download all artifacts
