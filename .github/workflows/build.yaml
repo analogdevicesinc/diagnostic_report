@@ -80,9 +80,19 @@ jobs:
       matrix:
         include:
           - docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_64@sha256:2a4b203ca34cf660339f8d8a5b32d290ae3c4918e18c0473902e2c12c86ca129
+            distro: kuiper
             architecture: arm64
             platform_flag: ""
           - docker_image: docker.cloudsmith.io/adi/containers/kuiper_basic_32@sha256:ce9c5eba9dc120595e42142665aa11ded7317181c01c14c190e86835cfef9c8a
+            distro: kuiper
+            architecture: armhf
+            platform_flag: "--platform linux/arm/v7"
+          - docker_image: debian:latest
+            distro: debian
+            architecture: arm64
+            platform_flag: ""
+          - docker_image: debian:latest
+            distro: debian
             architecture: armhf
             platform_flag: "--platform linux/arm/v7"
     steps:
@@ -98,37 +108,58 @@ jobs:
         ref: 37bf277259e5f1d464dd786b73756c7812a14eb4
         path: shared-actions
 
+    - name: Set up QEMU
+      # GitHub's arm64 runners may lack 32-bit ARM support; QEMU covers armhf either way.
+      uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+      with:
+        platforms: arm
+
     - name: Start persistent container
       run: |
         docker run -d \
             ${{matrix.platform_flag}} \
-            --name kuiper-${{matrix.architecture}} \
-            -v "$GITHUB_WORKSPACE/${{env.APP_NAME}}:/workspace/${{env.APP_NAME}}" \
-            -v "$GITHUB_WORKSPACE/shared-actions:/workspace/shared-actions" \
-            -w /workspace/${{env.APP_NAME}} \
-            ${{matrix.docker_image}} tail -f /dev/null
+            --name builder \
+            -v "$GITHUB_WORKSPACE/${{env.APP_NAME}}:/src/${{env.APP_NAME}}" \
+            -v "$GITHUB_WORKSPACE/shared-actions:/src/shared-actions" \
+            -e GITHUB_WORKSPACE=/src \
+            ${{matrix.docker_image}} sleep infinity
+
+    - name: Install curl
+      run: |
+        docker exec -u 0 builder sh -c "command -v curl >/dev/null || (apt-get update -qq && apt-get install -y -qq curl ca-certificates)"
 
     - name: Create debian package
       run: |
-        docker exec -e VERSION=${{needs.identify_version.outputs.app-version}} kuiper-${{matrix.architecture}} bash /workspace/shared-actions/deb-generator-action/build-deb.sh
+        docker exec \
+            -e VERSION=${{needs.identify_version.outputs.app-version}} \
+            -e WORKING_DIRECTORY=/src/${{env.APP_NAME}} \
+            -e GITHUB_WORKSPACE=/src \
+            builder bash /src/shared-actions/deb-generator-action/build-deb.sh
 
     - name: Install application
       run: |
-        docker exec kuiper-${{matrix.architecture}} sh -c "sudo dpkg -i /workspace/${{env.APP_NAME}}/artifacts/*.deb"
+        docker exec builder sh -c "sudo dpkg -i /src/artifacts/*.deb"
 
     - name: Verify install locations
       run: |
-        docker exec kuiper-${{matrix.architecture}} sh -c ".github/scripts/verify_install.sh"
+        docker exec builder /src/${{env.APP_NAME}}/.github/scripts/verify_install.sh
 
     - name: Copy .deb from container to host
       run: |
         mkdir -p dist
-        docker cp "kuiper-${{matrix.architecture}}:/workspace/${{env.APP_NAME}}/artifacts/." dist/
+        docker cp builder:/src/artifacts/. dist/
+
+    - name: Tag package with distro
+      # Keep release asset names distinct across distros of the same arch.
+      run: |
+        for deb in dist/*.deb; do
+          mv "$deb" "${deb%.deb}_${{matrix.distro}}.deb"
+        done
 
     - name: Upload .deb artifacts to github
       uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
       with:
-        name: ${{env.APP_NAME}}-${{matrix.architecture}}
+        name: ${{env.APP_NAME}}-${{matrix.distro}}-${{matrix.architecture}}
         path: dist/*.deb
         if-no-files-found: error
   build_native:
